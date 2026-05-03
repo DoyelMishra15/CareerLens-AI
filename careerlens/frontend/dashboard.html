@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CareerLens — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+
+  <!-- ── NAV ── -->
+  <nav class="dash-nav">
+    <a href="/" class="nav-logo"><span class="logo-mark">◈</span> CareerLens</a>
+    <div class="nav-status" id="navStatus">Ready to analyze</div>
+  </nav>
+
+  <!-- ── MAIN LAYOUT ── -->
+  <main class="dash-layout">
+
+    <!-- ════ LEFT: INPUT PANEL ════ -->
+    <aside class="input-panel">
+      <div class="panel-header">
+        <h2>New Analysis</h2>
+        <span class="panel-sub">Upload resume · Paste JD · Get insights</span>
+      </div>
+
+      <!-- Resume Upload -->
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">📄</div>
+        <div class="upload-text">
+          <strong>Drop your resume PDF</strong>
+          <span>or click to browse</span>
+        </div>
+        <input type="file" id="resumeFile" accept=".pdf" hidden>
+        <div class="upload-file-name" id="fileName">No file selected</div>
+      </div>
+
+      <!-- Job Description -->
+      <div class="jd-section">
+        <label class="input-label">Job Description</label>
+        <textarea id="jobDescription" class="jd-textarea"
+          placeholder="Paste the full job description here...&#10;&#10;Include: title, responsibilities, required skills, nice-to-haves..."></textarea>
+        <div class="jd-char-count" id="jdCharCount">0 characters</div>
+      </div>
+
+      <!-- Submit -->
+      <button class="btn-analyze" id="analyzeBtn" disabled>
+        <span class="btn-text">Analyze Resume</span>
+        <span class="btn-icon">→</span>
+      </button>
+
+      <!-- Error -->
+      <div class="error-msg" id="errorMsg"></div>
+
+      <!-- Tips -->
+      <div class="tips-box">
+        <div class="tip-title">💡 Pro tips</div>
+        <ul>
+          <li>Use a text-based PDF (not a scanned image)</li>
+          <li>Paste the <em>full</em> JD including requirements</li>
+          <li>Analysis takes 5–10s on first run (model loading)</li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- ════ RIGHT: RESULTS ════ -->
+    <section class="results-panel" id="resultsPanel">
+
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">◈</div>
+        <h3>Your analysis will appear here</h3>
+        <p>Upload a PDF resume and paste a job description to get started.</p>
+      </div>
+
+      <!-- Loading state -->
+      <div class="loading-state hidden" id="loadingState">
+        <div class="loader-ring"></div>
+        <div class="loader-steps">
+          <div class="loader-step active" id="step1">📄 Parsing resume...</div>
+          <div class="loader-step" id="step2">🧠 Computing semantic similarity...</div>
+          <div class="loader-step" id="step3">🔍 Analyzing skill gaps...</div>
+          <div class="loader-step" id="step4">🚀 Generating insights...</div>
+        </div>
+      </div>
+
+      <!-- Results (hidden until data loads) -->
+      <div class="results-content hidden" id="resultsContent">
+
+        <!-- ── SCORE HEADER ── -->
+        <div class="results-header">
+          <div class="score-section">
+            <div class="score-ring-container">
+              <svg viewBox="0 0 140 140" class="score-ring-svg" id="scoreRingSvg">
+                <circle cx="70" cy="70" r="58" fill="none" stroke="#1e1e2e" stroke-width="12"/>
+                <circle cx="70" cy="70" r="58" fill="none" id="scoreArc"
+                  stroke="#00d4aa" stroke-width="12"
+                  stroke-dasharray="364.4" stroke-dashoffset="364.4"
+                  stroke-linecap="round"
+                  transform="rotate(-90 70 70)"/>
+              </svg>
+              <div class="score-center">
+                <div class="score-number" id="scoreNumber">0</div>
+                <div class="score-label" id="scoreLabel">Score</div>
+              </div>
+            </div>
+            <div class="score-meta">
+              <div class="score-role" id="scoreRole">—</div>
+              <div class="score-badge" id="scoreBadge">—</div>
+              <div class="score-id" id="scoreId"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── TABS ── -->
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="skills">Skill Gap</button>
+          <button class="tab-btn" data-tab="weaknesses">Weaknesses</button>
+          <button class="tab-btn" data-tab="rewrite">AI Rewrite</button>
+          <button class="tab-btn" data-tab="insights">🔥 Growth Intel</button>
+        </div>
+
+        <!-- ── TAB: SKILLS ── -->
+        <div class="tab-panel active" id="tab-skills">
+          <div class="heatmap-legend">
+            <span class="legend-item"><span class="dot dot-strong"></span>Strong</span>
+            <span class="legend-item"><span class="dot dot-partial"></span>Partial</span>
+            <span class="legend-item"><span class="dot dot-missing"></span>Missing</span>
+          </div>
+          <div class="skill-heatmap" id="skillHeatmap"></div>
+        </div>
+
+        <!-- ── TAB: WEAKNESSES ── -->
+        <div class="tab-panel hidden" id="tab-weaknesses">
+          <div class="weakness-list" id="weaknessList"></div>
+        </div>
+
+        <!-- ── TAB: REWRITE ── -->
+        <div class="tab-panel hidden" id="tab-rewrite">
+          <div class="rewrite-intro">
+            <p>Click any bullet point below to get an AI-powered rewrite suggestion.</p>
+          </div>
+          <div class="bullet-list" id="bulletList"></div>
+          <div class="rewrite-panel hidden" id="rewritePanel">
+            <div class="rewrite-loading hidden" id="rewriteLoading">
+              <div class="mini-loader"></div> Rewriting...
+            </div>
+            <div class="rewrite-result" id="rewriteResult"></div>
+          </div>
+        </div>
+
+        <!-- ── TAB: INSIGHTS ── -->
+        <div class="tab-panel hidden" id="tab-insights">
+          <div class="insights-container" id="insightsContainer">
+            <div class="insights-loading">Loading career intelligence...</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
