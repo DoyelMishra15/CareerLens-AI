@@ -9,8 +9,8 @@
 
 ## 🚀 Live Demo
 
-**Backend:** Deploy on [Render](https://render.com) (free tier)  
-**Frontend:** Served by FastAPI (same origin) or GitHub Pages
+**Backend:** Deploy to be done  
+**Frontend:** None
 
 ---
 
