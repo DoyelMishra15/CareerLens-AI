@@ -7,12 +7,20 @@ import asyncio
 import uuid
 import time
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from models.schemas import AnalyzeResponse
-from services import (
-    extract_text_from_pdf, detect_resume_sections,
-    compute_match_score, get_match_label, extract_job_title,
-    analyze_skill_gaps, detect_resume_weaknesses,
-)
+try:
+    from backend.models.schemas import AnalyzeResponse
+    from backend.services import (
+        extract_text_from_pdf, detect_resume_sections,
+        compute_match_score, get_match_label, extract_job_title,
+        analyze_skill_gaps, detect_resume_weaknesses,
+    )
+except ImportError:
+    from models.schemas import AnalyzeResponse
+    from services import (
+        extract_text_from_pdf, detect_resume_sections,
+        compute_match_score, get_match_label, extract_job_title,
+        analyze_skill_gaps, detect_resume_weaknesses,
+    )
 
 router = APIRouter()
 

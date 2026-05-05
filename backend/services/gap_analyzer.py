@@ -1,190 +1,290 @@
 """
-CareerLens — Skill Gap Analyzer Service
-Extracts skills from JD and checks presence in resume.
+CareerLens — Skill Gap Analyzer  (v2)
+======================================
+Key improvements over v1
+------------------------
+* Uses the shared SKILL_ALIASES + normalise_skill from scorer.py
+  so Flask/FastAPI/Express all resolve to "backend api development" — no
+  more false negatives from framework mismatches.
+* Splits JD skills into REQUIRED vs OPTIONAL before building the heatmap.
+* Missing OPTIONAL skills are shown but clearly labelled — they do not drive
+  a "you failed" perception.
+* Semantic threshold tuned to 0.42 to reduce false positives.
+* Returns rich per-skill metadata: importance, category, matched aliases.
 """
 
+from __future__ import annotations
+
 import re
-from typing import List, Tuple
+from typing import List
+
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+
 from .model_manager import model_manager
-from models.schemas import SkillMatch
+from .scorer import (
+    SKILL_ALIASES,
+    _ALIAS_TO_CANONICAL,
+    _extract_jd_skills_with_importance,
+    _skill_present_score,
+    _smart_chunk,
+    normalise_skill,
+)
+
+try:
+    from backend.models.schemas import SkillMatch, ResumeWeakness
+except ImportError:
+    from models.schemas import SkillMatch, ResumeWeakness
 
 
-# ── Curated skill taxonomy ────────────────────────────────────────────────────
-SKILL_TAXONOMY = {
-    "Technical": [
-        "Python", "Java", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
-        "Kotlin", "Swift", "R", "MATLAB", "Scala", "Ruby", "PHP",
-        "React", "Vue", "Angular", "Next.js", "FastAPI", "Django", "Flask",
-        "Spring Boot", "Node.js", "Express", "GraphQL", "REST API",
-        "Machine Learning", "Deep Learning", "NLP", "Computer Vision",
-        "TensorFlow", "PyTorch", "Keras", "scikit-learn", "Hugging Face",
-        "SQL", "PostgreSQL", "MySQL", "MongoDB", "Redis", "Elasticsearch",
-        "Docker", "Kubernetes", "AWS", "GCP", "Azure", "Terraform", "CI/CD",
-        "Git", "Linux", "Bash", "Agile", "Scrum",
-    ],
-    "Data": [
-        "Data Analysis", "Data Engineering", "ETL", "Spark", "Kafka", "Airflow",
-        "dbt", "Tableau", "Power BI", "Looker", "Pandas", "NumPy",
-        "A/B Testing", "Statistics", "Feature Engineering", "Data Modeling",
-        "Data Warehousing", "BigQuery", "Snowflake", "Data Pipeline",
-    ],
-    "Soft Skill": [
-        "Leadership", "Communication", "Teamwork", "Problem Solving",
-        "Critical Thinking", "Time Management", "Adaptability", "Collaboration",
-        "Project Management", "Stakeholder Management", "Mentoring", "Presentation",
-    ],
+# ── Skill category lookup (for UI colour grouping) ────────────────────────────
+_CATEGORY_MAP: dict[str, str] = {
+    "python": "Language", "javascript": "Language", "typescript": "Language",
+    "c++": "Language", "c#": "Language", "golang": "Language", "r language": "Language",
+
+    "backend api development": "Framework", "microservices": "Architecture",
+    "system design": "Architecture", "object oriented programming": "Concept",
+    "functional programming": "Concept", "agile": "Process",
+    "version control": "Tool",
+
+    "machine learning": "AI/ML", "deep learning": "AI/ML",
+    "natural language processing": "AI/ML", "computer vision": "AI/ML",
+    "mlops": "AI/ML", "large language models": "AI/ML",
+    "reinforcement learning": "AI/ML",
+    "pytorch": "ML Library", "tensorflow": "ML Library",
+    "scikit-learn": "ML Library", "hugging face": "ML Library",
+
+    "sql": "Data", "nosql": "Data", "data analysis": "Data",
+    "data engineering": "Data", "apache spark": "Data",
+    "apache kafka": "Data", "apache airflow": "Data",
+
+    "aws": "Cloud", "gcp": "Cloud", "azure": "Cloud",
+    "docker": "DevOps", "kubernetes": "DevOps", "ci/cd": "DevOps",
+    "infrastructure as code": "DevOps",
 }
 
-# Flat list with category mapping
-ALL_SKILLS: List[Tuple[str, str]] = [
-    (skill, cat)
-    for cat, skills in SKILL_TAXONOMY.items()
-    for skill in skills
-]
+def _category(canonical: str) -> str:
+    return _CATEGORY_MAP.get(canonical, "Technical")
 
 
-def extract_skills_from_text(text: str) -> List[str]:
-    """Extract skill mentions from text using pattern matching."""
-    found = []
-    text_lower = text.lower()
-    for skill, _ in ALL_SKILLS:
-        pattern = r"\b" + re.escape(skill.lower()) + r"\b"
-        if re.search(pattern, text_lower):
-            found.append(skill)
-    return list(set(found))
-
+# ══════════════════════════════════════════════════════════════════════════════
+# PUBLIC API
+# ══════════════════════════════════════════════════════════════════════════════
 
 def analyze_skill_gaps(resume_text: str, job_description: str) -> List[SkillMatch]:
     """
-    Compare skills in JD vs resume.
-    Uses both keyword matching AND semantic similarity for a hybrid approach.
+    Build a skill-gap heatmap for the dashboard.
+
+    Returns up to 28 SkillMatch objects sorted as:
+      1. Required + missing  (red — most actionable)
+      2. Required + partial  (amber)
+      3. Optional + missing  (softer red)
+      4. Required + strong   (green)
+      5. Optional + strong   (lighter green)
+
+    The SkillMatch.score field is now a true 0-1 confidence,
+    NOT a penalty-inflated distance.
     """
     embedder = model_manager.embedder
 
-    jd_skills = extract_skills_from_text(job_description)
-    resume_skills = extract_skills_from_text(resume_text)
-    resume_lower = resume_text.lower()
+    # Encode resume once
+    resume_chunks   = _smart_chunk(resume_text)
+    resume_embs     = embedder.encode(resume_chunks, convert_to_numpy=True)
+    resume_embedding = np.mean(resume_embs, axis=0, keepdims=True)
 
-    # Encode resume as a whole for semantic matching
-    resume_embedding = embedder.encode([resume_text], convert_to_numpy=True)
+    # Get JD skills with importance classification
+    jd_skills = _extract_jd_skills_with_importance(job_description)
 
     results: List[SkillMatch] = []
 
-    # Only analyze skills mentioned in the JD
-    target_skills = jd_skills if jd_skills else [s for s, _ in ALL_SKILLS[:30]]
-
-    for skill in target_skills:
-        # Find category
-        category = next(
-            (cat for s, cat in ALL_SKILLS if s.lower() == skill.lower()), "Technical"
+    for canonical, aliases, importance in jd_skills:
+        status, confidence = _skill_present_score(
+            canonical, aliases,
+            resume_text, resume_embedding, embedder,
         )
 
-        # Keyword match (strong signal)
-        in_resume_keyword = skill.lower() in resume_lower
+        # Display name: use canonical but capitalise nicely
+        display_name = _display_name(canonical, aliases, resume_text)
 
-        if in_resume_keyword:
-            # Exact keyword match → strong
-            status = "strong"
-            score = _compute_skill_score(skill, resume_text, embedder, base=0.78)
-        else:
-            # Semantic match
-            skill_embedding = embedder.encode([skill], convert_to_numpy=True)
-            sem_score = float(
-                cosine_similarity(resume_embedding, skill_embedding)[0][0]
-            )
-            if sem_score > 0.55:
-                status = "partial"
-                score = round(float(np.clip(sem_score, 0.4, 0.72)), 2)
-            else:
-                status = "missing"
-                score = round(float(np.clip(sem_score * 0.5, 0.0, 0.35)), 2)
+        results.append(SkillMatch(
+            skill=display_name,
+            status=status,
+            score=confidence,
+            category=f"{importance.title()} · {_category(canonical)}",
+        ))
 
-        results.append(
-            SkillMatch(skill=skill, status=status, score=score, category=category)
+    # ── Sort ─────────────────────────────────────────────────────────────────
+    _sort_key = {
+        ("required", "missing"):  0,
+        ("required", "partial"):  1,
+        ("optional", "missing"):  2,
+        ("required", "strong"):   3,
+        ("optional", "partial"):  4,
+        ("optional", "strong"):   5,
+    }
+    importance_by_display = {
+        _display_name(c, a, resume_text): i
+        for c, a, i in jd_skills
+    }
+
+    def sort_fn(sm: SkillMatch) -> tuple:
+        imp = importance_by_display.get(sm.skill, "required")
+        pri = _sort_key.get((imp, sm.status), 6)
+        return (pri, -sm.score)
+
+    results.sort(key=sort_fn)
+    return results[:28]
+
+
+def get_missing_required_skills(resume_text: str, job_description: str) -> list[str]:
+    """
+    Return a flat list of canonical skill names that are REQUIRED in the JD
+    but absent or partial in the resume. Used by the insights engine.
+    """
+    embedder = model_manager.embedder
+    resume_chunks    = _smart_chunk(resume_text)
+    resume_embs      = embedder.encode(resume_chunks, convert_to_numpy=True)
+    resume_embedding = np.mean(resume_embs, axis=0, keepdims=True)
+
+    jd_skills = _extract_jd_skills_with_importance(job_description)
+    missing: list[str] = []
+
+    for canonical, aliases, importance in jd_skills:
+        if importance != "required":
+            continue
+        status, _ = _skill_present_score(
+            canonical, aliases, resume_text, resume_embedding, embedder
         )
+        if status in ("missing", "partial"):
+            missing.append(canonical)
 
-    # Sort: missing first, then partial, then strong
-    order = {"missing": 0, "partial": 1, "strong": 2}
-    results.sort(key=lambda x: (order[x.status], -x.score))
-
-    return results[:25]  # Cap at 25 for UI readability
+    return missing
 
 
-def _compute_skill_score(
-    skill: str, resume_text: str, embedder, base: float = 0.75
-) -> float:
-    """Compute a nuanced score when skill is present (count mentions, context)."""
-    count = len(
-        re.findall(r"\b" + re.escape(skill.lower()) + r"\b", resume_text.lower())
-    )
-    # More mentions → slightly higher score, capped at 0.98
-    return round(min(base + count * 0.04, 0.98), 2)
-
-
-def detect_resume_weaknesses(resume_text: str, sections: dict) -> list:
+def detect_resume_weaknesses(resume_text: str, sections: dict) -> List[ResumeWeakness]:
     """
-    Heuristic detection of common resume weaknesses.
+    Heuristic detection of common resume anti-patterns.
+    Returns a list of ResumeWeakness objects, each with:
+      section, issue, severity (high/medium/low), suggestion.
     """
-    from models.schemas import ResumeWeakness
-
-    weaknesses = []
+    weaknesses: List[ResumeWeakness] = []
+    word_count = len(resume_text.split())
+    rl = resume_text.lower()
 
     # 1. No quantified achievements
-    has_numbers = bool(re.search(r"\d+%|\$\d+|\d+x|\d+\+", resume_text))
-    if not has_numbers:
+    if not re.search(r"\d+\s*%|\$\s*\d+|\d+\s*x\b|\d+\s*\+|\d+\s*(million|billion|k\b)",
+                     resume_text, re.I):
         weaknesses.append(ResumeWeakness(
             section="Experience",
-            issue="No quantified achievements found",
+            issue="No quantified achievements detected",
             severity="high",
-            suggestion="Add metrics: 'Increased revenue by 30%', 'Reduced latency by 2x'"
+            suggestion=(
+                "Add impact metrics to every bullet: "
+                "'Reduced inference latency by 40%', 'Trained model on 50M+ samples', "
+                "'Increased conversion rate by $120K ARR'"
+            ),
         ))
 
     # 2. Weak action verbs
-    weak_verbs = ["responsible for", "helped", "worked on", "assisted", "was involved"]
-    found_weak = [v for v in weak_verbs if v in resume_text.lower()]
+    weak_phrases = [
+        "responsible for", "worked on", "helped with",
+        "assisted", "was involved in", "participated in",
+    ]
+    found_weak = [p for p in weak_phrases if p in rl]
     if found_weak:
         weaknesses.append(ResumeWeakness(
             section="Experience",
-            issue=f"Weak action verbs detected: {', '.join(found_weak[:3])}",
+            issue=f"Passive phrasing detected: '{found_weak[0]}'",
             severity="medium",
-            suggestion="Replace with strong verbs: Led, Built, Architected, Delivered, Drove"
+            suggestion=(
+                "Replace with strong action verbs: "
+                "Architected · Engineered · Delivered · Drove · Spearheaded · Optimised"
+            ),
         ))
 
-    # 3. Missing summary section
-    if "summary" not in sections and "objective" not in resume_text.lower():
+    # 3. Missing professional summary
+    has_summary = (
+        "summary" in sections
+        or "objective" in rl
+        or "profile" in rl
+        or "about" in sections
+    )
+    if not has_summary:
         weaknesses.append(ResumeWeakness(
             section="Summary",
             issue="No professional summary detected",
             severity="medium",
-            suggestion="Add a 3-line summary highlighting your value proposition and target role"
+            suggestion=(
+                "Add a 3-sentence summary: "
+                "(1) Years of experience + title, "
+                "(2) Core technical expertise, "
+                "(3) Key achievement or career goal"
+            ),
         ))
 
-    # 4. Too short
-    word_count = len(resume_text.split())
+    # 4. Length checks
     if word_count < 200:
         weaknesses.append(ResumeWeakness(
             section="Overall",
-            issue=f"Resume is very short ({word_count} words)",
+            issue=f"Resume is very thin ({word_count} words)",
             severity="high",
-            suggestion="Expand experience, projects, and skills sections for stronger signal"
+            suggestion=(
+                "Expand experience bullets (4–6 per role), add a projects section, "
+                "and include a dedicated skills list for ATS parsing"
+            ),
         ))
-    elif word_count > 1000:
+    elif word_count > 1200:
         weaknesses.append(ResumeWeakness(
             section="Overall",
             issue=f"Resume may be too long ({word_count} words)",
             severity="low",
-            suggestion="Trim to 1 page for < 5 years experience, 2 pages for senior roles"
+            suggestion=(
+                "Target 1 page for < 5 years XP, 2 pages for senior roles. "
+                "Cut older or irrelevant roles."
+            ),
         ))
 
-    # 5. Missing skills section
-    if "skills" not in sections:
+    # 5. No dedicated skills section
+    if "skills" not in sections and "technical" not in rl[:300]:
         weaknesses.append(ResumeWeakness(
             section="Skills",
             issue="No dedicated skills section found",
             severity="medium",
-            suggestion="Add a skills section with key technical and soft skills for ATS scanning"
+            suggestion=(
+                "Add a 'Technical Skills' section with grouped keywords "
+                "(Languages · Frameworks · Cloud · Tools) — critical for ATS keyword scanning"
+            ),
+        ))
+
+    # 6. No project / portfolio signals
+    has_projects = any(k in rl for k in ["github", "project", "built", "portfolio", "open source"])
+    if not has_projects:
+        weaknesses.append(ResumeWeakness(
+            section="Projects",
+            issue="No project or GitHub signals found",
+            severity="low",
+            suggestion=(
+                "Add a Projects section with 2–3 shipped projects, "
+                "each with tech stack + measurable outcome"
+            ),
         ))
 
     return weaknesses
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _display_name(canonical: str, aliases: list[str], resume_text: str) -> str:
+    """
+    If an alias was actually found in the resume, show that alias
+    (e.g. 'Flask' instead of 'backend api development').
+    Otherwise return a title-cased canonical.
+    """
+    resume_lower = resume_text.lower()
+    for alias in aliases:
+        if re.search(r"\b" + re.escape(alias.lower()) + r"\b", resume_lower):
+            return alias.title() if alias.islower() else alias
+    # Title-case canonical
+    return canonical.title()

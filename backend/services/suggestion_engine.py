@@ -7,7 +7,10 @@ Falls back to rule-based rewriting if API is unavailable.
 import re
 import random
 from typing import List
-from models.schemas import RewriteResponse
+try:
+    from backend.models.schemas import RewriteResponse
+except ImportError:
+    from models.schemas import RewriteResponse
 
 
 # ── Strong action verbs by category ──────────────────────────────────────────

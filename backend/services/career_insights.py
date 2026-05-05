@@ -5,7 +5,10 @@ Prioritizes skills to learn based on impact score.
 """
 
 from typing import List, Dict
-from models.schemas import LearningPath, InsightsResponse
+try:
+    from backend.models.schemas import LearningPath, InsightsResponse
+except ImportError:
+    from models.schemas import LearningPath, InsightsResponse
 
 
 # ── Learning path database ────────────────────────────────────────────────────

@@ -5,8 +5,12 @@ Rewrites individual resume bullet points for maximum impact.
 
 import asyncio
 from fastapi import APIRouter
-from models.schemas import RewriteRequest, RewriteResponse
-from services import rewrite_bullet_point
+try:
+    from backend.models.schemas import RewriteRequest, RewriteResponse
+    from backend.services import rewrite_bullet_point
+except ImportError:
+    from models.schemas import RewriteRequest, RewriteResponse
+    from services import rewrite_bullet_point
 
 router = APIRouter()
 

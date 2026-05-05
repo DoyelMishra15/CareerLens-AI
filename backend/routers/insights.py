@@ -5,8 +5,12 @@ Career Growth Intelligence endpoint.
 
 import asyncio
 from fastapi import APIRouter
-from models.schemas import InsightsRequest, InsightsResponse
-from services import generate_insights
+try:
+    from backend.models.schemas import InsightsRequest, InsightsResponse
+    from backend.services import generate_insights
+except ImportError:
+    from models.schemas import InsightsRequest, InsightsResponse
+    from services import generate_insights
 
 router = APIRouter()
 
