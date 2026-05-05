@@ -1,6 +1,13 @@
 from .parser import extract_text_from_pdf, detect_resume_sections, extract_bullet_points
 
-from .scorer import compute_match_score, get_match_label, extract_job_title
+from .scorer import (
+    compute_match_score,
+    compute_detailed_score,
+    get_match_label,
+    extract_job_title,
+    normalise_skill,
+    SKILL_ALIASES,
+)
 
 from .gap_analyzer import (
     analyze_skill_gaps,
