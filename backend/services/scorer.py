@@ -14,7 +14,7 @@ Why this works like a real ATS
   the full semantic + required contribution (no cliff-edge penalty).
 • Raw cosine is re-calibrated: professional résumé <-> JD pairs typically land
   between 0.25–0.75. We map that range linearly to 0–100 so a genuinely
-  aligned doc lands proper score.
+  aligned doc lands 55–80 rather than 30–50.
 """
 
 from __future__ import annotations
