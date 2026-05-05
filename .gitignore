@@ -216,3 +216,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ===== CareerLens AI additions =====
+
+# HuggingFace / transformer caches
+huggingface/
+transformers_cache/
+sentence_transformers/
+
+# Model files (VERY IMPORTANT)
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# spaCy model
+en_core_web_sm/
+
+# Uploaded resumes (user data)
+uploads/
+*.pdf
+
+# Render deployment
+.render/
