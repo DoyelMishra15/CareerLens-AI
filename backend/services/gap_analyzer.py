@@ -1,16 +1,6 @@
 """
-CareerLens — Skill Gap Analyzer  (v2)
-======================================
-Key improvements over v1
-------------------------
-* Uses the shared SKILL_ALIASES + normalise_skill from scorer.py
-  so Flask/FastAPI/Express all resolve to "backend api development" — no
-  more false negatives from framework mismatches.
-* Splits JD skills into REQUIRED vs OPTIONAL before building the heatmap.
-* Missing OPTIONAL skills are shown but clearly labelled — they do not drive
-  a "you failed" perception.
-* Semantic threshold tuned to 0.42 to reduce false positives.
-* Returns rich per-skill metadata: importance, category, matched aliases.
+CareerLens -- Gap Analyzer v3
+Works with scorer v3: implied skills, seniority-aware, strengths + gaps.
 """
 
 from __future__ import annotations
@@ -28,7 +18,8 @@ from .scorer import (
     _extract_jd_skills_with_importance,
     _skill_present_score,
     _smart_chunk,
-    normalise_skill,
+    compute_implied_skills,
+    detect_seniority,
 )
 
 try:
@@ -37,200 +28,212 @@ except ImportError:
     from models.schemas import SkillMatch, ResumeWeakness
 
 
-# ── Skill category lookup (for UI colour grouping) ────────────────────────────
-_CATEGORY_MAP: dict[str, str] = {
+# Category labels for UI grouping
+_CATEGORY_MAP = {
     "python": "Language", "javascript": "Language", "typescript": "Language",
-    "c++": "Language", "c#": "Language", "golang": "Language", "r language": "Language",
-
+    "java": "Language", "c++": "Language", "c#": "Language",
+    "golang": "Language", "r language": "Language",
     "backend api development": "Framework", "microservices": "Architecture",
-    "system design": "Architecture", "object oriented programming": "Concept",
-    "functional programming": "Concept", "agile": "Process",
-    "version control": "Tool",
-
     "machine learning": "AI/ML", "deep learning": "AI/ML",
     "natural language processing": "AI/ML", "computer vision": "AI/ML",
     "mlops": "AI/ML", "large language models": "AI/ML",
-    "reinforcement learning": "AI/ML",
+    "reinforcement learning": "AI/ML", "time series analysis": "AI/ML",
     "pytorch": "ML Library", "tensorflow": "ML Library",
     "scikit-learn": "ML Library", "hugging face": "ML Library",
-
+    "numpy": "ML Library", "pandas": "ML Library",
     "sql": "Data", "nosql": "Data", "data analysis": "Data",
     "data engineering": "Data", "apache spark": "Data",
-    "apache kafka": "Data", "apache airflow": "Data",
-
     "aws": "Cloud", "gcp": "Cloud", "azure": "Cloud",
     "docker": "DevOps", "kubernetes": "DevOps", "ci/cd": "DevOps",
-    "infrastructure as code": "DevOps",
+    "git": "Tool", "object oriented programming": "Concept",
+    "data structures": "Concept", "agile": "Process",
+    "system design": "Architecture", "problem solving": "Concept",
 }
+
 
 def _category(canonical: str) -> str:
     return _CATEGORY_MAP.get(canonical, "Technical")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PUBLIC API
-# ══════════════════════════════════════════════════════════════════════════════
+def _display_name(canonical: str, aliases: list, resume_text: str) -> str:
+    """Show the alias actually found in the resume, fallback to title-cased canonical."""
+    resume_lower = resume_text.lower()
+    for alias in aliases:
+        if re.search(r"\b" + re.escape(alias.lower()) + r"\b", resume_lower):
+            return alias.title() if alias.islower() else alias
+    return canonical.title()
+
 
 def analyze_skill_gaps(resume_text: str, job_description: str) -> List[SkillMatch]:
     """
-    Build a skill-gap heatmap for the dashboard.
+    Build the skill-gap heatmap.
+    Now includes 'implied' status so the UI can show skills the candidate
+    probably has even without explicit keywords.
 
-    Returns up to 28 SkillMatch objects sorted as:
-      1. Required + missing  (red — most actionable)
-      2. Required + partial  (amber)
-      3. Optional + missing  (softer red)
-      4. Required + strong   (green)
-      5. Optional + strong   (lighter green)
-
-    The SkillMatch.score field is now a true 0-1 confidence,
-    NOT a penalty-inflated distance.
+    Sort order:
+      1. Required + missing   (most urgent -- shown first)
+      2. Required + partial
+      3. Optional + missing
+      4. Required + implied
+      5. Required + strong
+      6. Optional + implied / strong
     """
     embedder = model_manager.embedder
 
-    # Encode resume once
-    resume_chunks   = _smart_chunk(resume_text)
-    resume_embs     = embedder.encode(resume_chunks, convert_to_numpy=True)
+    resume_chunks    = _smart_chunk(resume_text)
+    resume_embs      = embedder.encode(resume_chunks, convert_to_numpy=True)
     resume_embedding = np.mean(resume_embs, axis=0, keepdims=True)
-
-    # Get JD skills with importance classification
-    jd_skills = _extract_jd_skills_with_importance(job_description)
+    implied_scores   = compute_implied_skills(resume_text)
+    jd_skills        = _extract_jd_skills_with_importance(job_description)
 
     results: List[SkillMatch] = []
 
     for canonical, aliases, importance in jd_skills:
         status, confidence = _skill_present_score(
-            canonical, aliases,
-            resume_text, resume_embedding, embedder,
+            canonical, aliases, resume_text,
+            resume_embedding, embedder, implied_scores,
         )
 
-        # Display name: use canonical but capitalise nicely
-        display_name = _display_name(canonical, aliases, resume_text)
+        display  = _display_name(canonical, aliases, resume_text)
+        category = f"{importance.title()} - {_category(canonical)}"
 
         results.append(SkillMatch(
-            skill=display_name,
+            skill=display,
             status=status,
             score=confidence,
-            category=f"{importance.title()} · {_category(canonical)}",
+            category=category,
         ))
 
-    # ── Sort ─────────────────────────────────────────────────────────────────
-    _sort_key = {
+    # Sort
+    _priority = {
         ("required", "missing"):  0,
         ("required", "partial"):  1,
         ("optional", "missing"):  2,
-        ("required", "strong"):   3,
-        ("optional", "partial"):  4,
-        ("optional", "strong"):   5,
+        ("required", "implied"):  3,
+        ("required", "strong"):   4,
+        ("optional", "implied"):  5,
+        ("optional", "partial"):  5,
+        ("optional", "strong"):   6,
     }
-    importance_by_display = {
+
+    imp_lookup = {
         _display_name(c, a, resume_text): i
         for c, a, i in jd_skills
     }
 
-    def sort_fn(sm: SkillMatch) -> tuple:
-        imp = importance_by_display.get(sm.skill, "required")
-        pri = _sort_key.get((imp, sm.status), 6)
+    def sort_key(sm: SkillMatch):
+        imp = imp_lookup.get(sm.skill, "required")
+        pri = _priority.get((imp, sm.status), 7)
         return (pri, -sm.score)
 
-    results.sort(key=sort_fn)
+    results.sort(key=sort_key)
     return results[:28]
 
 
-def get_missing_required_skills(resume_text: str, job_description: str) -> list[str]:
-    """
-    Return a flat list of canonical skill names that are REQUIRED in the JD
-    but absent or partial in the resume. Used by the insights engine.
-    """
-    embedder = model_manager.embedder
+def get_missing_required_skills(resume_text: str, job_description: str) -> list:
+    """Return list of required skill canonical names that are missing or partial."""
+    embedder         = model_manager.embedder
     resume_chunks    = _smart_chunk(resume_text)
     resume_embs      = embedder.encode(resume_chunks, convert_to_numpy=True)
     resume_embedding = np.mean(resume_embs, axis=0, keepdims=True)
+    implied_scores   = compute_implied_skills(resume_text)
+    jd_skills        = _extract_jd_skills_with_importance(job_description)
 
-    jd_skills = _extract_jd_skills_with_importance(job_description)
-    missing: list[str] = []
-
+    missing = []
     for canonical, aliases, importance in jd_skills:
         if importance != "required":
             continue
         status, _ = _skill_present_score(
-            canonical, aliases, resume_text, resume_embedding, embedder
+            canonical, aliases, resume_text,
+            resume_embedding, embedder, implied_scores,
         )
         if status in ("missing", "partial"):
             missing.append(canonical)
-
     return missing
 
 
 def detect_resume_weaknesses(resume_text: str, sections: dict) -> List[ResumeWeakness]:
-    """
-    Heuristic detection of common resume anti-patterns.
-    Returns a list of ResumeWeakness objects, each with:
-      section, issue, severity (high/medium/low), suggestion.
-    """
+    """Context-aware weakness detection with actionable, specific suggestions."""
     weaknesses: List[ResumeWeakness] = []
+    rl         = resume_text.lower()
     word_count = len(resume_text.split())
-    rl = resume_text.lower()
 
     # 1. No quantified achievements
-    if not re.search(r"\d+\s*%|\$\s*\d+|\d+\s*x\b|\d+\s*\+|\d+\s*(million|billion|k\b)",
-                     resume_text, re.I):
+    has_numbers = bool(re.search(
+        r"\d+\s*%|\$\s*\d+|\d+\s*x\b|\d+\s*\+|\d+\s*(million|billion|k\b|"
+        r"users|customers|accuracy|f1|requests)",
+        resume_text, re.I
+    ))
+    if not has_numbers:
         weaknesses.append(ResumeWeakness(
             section="Experience",
-            issue="No quantified achievements detected",
+            issue="No quantified achievements found",
             severity="high",
             suggestion=(
-                "Add impact metrics to every bullet: "
-                "'Reduced inference latency by 40%', 'Trained model on 50M+ samples', "
-                "'Increased conversion rate by $120K ARR'"
+                "Add impact numbers to every bullet: "
+                "'Achieved 92% model accuracy', 'Processed 50K+ records', "
+                "'Reduced runtime by 40%', 'Served 1000+ users'"
             ),
         ))
 
     # 2. Weak action verbs
-    weak_phrases = [
+    weak = [p for p in [
         "responsible for", "worked on", "helped with",
         "assisted", "was involved in", "participated in",
-    ]
-    found_weak = [p for p in weak_phrases if p in rl]
-    if found_weak:
+    ] if p in rl]
+    if weak:
         weaknesses.append(ResumeWeakness(
             section="Experience",
-            issue=f"Passive phrasing detected: '{found_weak[0]}'",
+            issue=f"Passive phrasing: '{weak[0]}'",
             severity="medium",
             suggestion=(
-                "Replace with strong action verbs: "
-                "Architected · Engineered · Delivered · Drove · Spearheaded · Optimised"
+                "Use strong action verbs: "
+                "Built, Developed, Designed, Implemented, Engineered, Optimised, Deployed"
             ),
         ))
 
-    # 3. Missing professional summary
+    # 3. Missing summary
     has_summary = (
         "summary" in sections
-        or "objective" in rl
-        or "profile" in rl
-        or "about" in sections
+        or any(k in rl[:400] for k in ["summary", "objective", "profile", "about me"])
     )
     if not has_summary:
         weaknesses.append(ResumeWeakness(
             section="Summary",
-            issue="No professional summary detected",
+            issue="No professional summary section",
             severity="medium",
             suggestion=(
-                "Add a 3-sentence summary: "
-                "(1) Years of experience + title, "
-                "(2) Core technical expertise, "
-                "(3) Key achievement or career goal"
+                "Add 2-3 sentences: (1) Who you are + year of study, "
+                "(2) Core technical strengths, (3) What you're seeking"
             ),
         ))
 
-    # 4. Length checks
+    # 4. No deployment signals
+    has_deploy = any(k in rl for k in [
+        "deployed", "live", "hosted", "github pages", "render", "heroku",
+        "aws", "docker", "production", "api endpoint",
+    ])
+    if not has_deploy:
+        weaknesses.append(ResumeWeakness(
+            section="Projects",
+            issue="No deployed projects detected",
+            severity="medium",
+            suggestion=(
+                "Deploy at least one project — even a simple Flask/FastAPI app on Render (free). "
+                "Add the live URL to your resume. This massively differentiates you."
+            ),
+        ))
+
+    # 5. Resume length
     if word_count < 200:
         weaknesses.append(ResumeWeakness(
             section="Overall",
-            issue=f"Resume is very thin ({word_count} words)",
+            issue=f"Resume is very short ({word_count} words)",
             severity="high",
             suggestion=(
-                "Expand experience bullets (4–6 per role), add a projects section, "
-                "and include a dedicated skills list for ATS parsing"
+                "Expand each project bullet to 3-4 lines: "
+                "what you built, how you built it, what it achieved. "
+                "Add a Technical Skills section with grouped keywords."
             ),
         ))
     elif word_count > 1200:
@@ -238,53 +241,33 @@ def detect_resume_weaknesses(resume_text: str, sections: dict) -> List[ResumeWea
             section="Overall",
             issue=f"Resume may be too long ({word_count} words)",
             severity="low",
-            suggestion=(
-                "Target 1 page for < 5 years XP, 2 pages for senior roles. "
-                "Cut older or irrelevant roles."
-            ),
+            suggestion="Keep to 1 page for students / < 3 years experience.",
         ))
 
-    # 5. No dedicated skills section
-    if "skills" not in sections and "technical" not in rl[:300]:
+    # 6. No skills section
+    if "skills" not in sections and "technical" not in rl[:500]:
         weaknesses.append(ResumeWeakness(
             section="Skills",
-            issue="No dedicated skills section found",
+            issue="No dedicated Technical Skills section",
             severity="medium",
             suggestion=(
-                "Add a 'Technical Skills' section with grouped keywords "
-                "(Languages · Frameworks · Cloud · Tools) — critical for ATS keyword scanning"
+                "Add a grouped Skills section: "
+                "Languages | Frameworks | Tools | Concepts. "
+                "Critical for ATS keyword scanning."
             ),
         ))
 
-    # 6. No project / portfolio signals
-    has_projects = any(k in rl for k in ["github", "project", "built", "portfolio", "open source"])
-    if not has_projects:
+    # 7. No GitHub / portfolio link
+    has_github = "github.com" in rl or "github:" in rl
+    if not has_github:
         weaknesses.append(ResumeWeakness(
             section="Projects",
-            issue="No project or GitHub signals found",
-            severity="low",
+            issue="No GitHub profile or project links",
+            severity="medium",
             suggestion=(
-                "Add a Projects section with 2–3 shipped projects, "
-                "each with tech stack + measurable outcome"
+                "Add your GitHub URL to the header and link each project. "
+                "Recruiters click GitHub links — make sure repos have good READMEs."
             ),
         ))
 
     return weaknesses
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _display_name(canonical: str, aliases: list[str], resume_text: str) -> str:
-    """
-    If an alias was actually found in the resume, show that alias
-    (e.g. 'Flask' instead of 'backend api development').
-    Otherwise return a title-cased canonical.
-    """
-    resume_lower = resume_text.lower()
-    for alias in aliases:
-        if re.search(r"\b" + re.escape(alias.lower()) + r"\b", resume_lower):
-            return alias.title() if alias.islower() else alias
-    # Title-case canonical
-    return canonical.title()

@@ -4,9 +4,6 @@ python-multipart==0.0.9
 aiofiles==23.2.1
 PyMuPDF==1.24.3
 sentence-transformers==2.7.0
-transformers==4.40.2
-spacy==3.7.4
-torch==2.3.0
 numpy==1.26.4
 scikit-learn==1.4.2
 sqlitedict==2.1.0
