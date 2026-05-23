@@ -1,6 +1,6 @@
 """
 CareerLens — ML Model Manager
-Singleton loader. Classifier removed to fit Render free tier (512MB RAM).
+Classifier removed; CPU-only torch keeps memory under 512MB.
 """
 
 import logging
@@ -28,20 +28,15 @@ class ModelManager:
     def load_all(self):
         if self._loaded:
             return
-        logger.info("🔄 Loading ML models...")
-
-        logger.info("  Loading sentence-transformers/all-MiniLM-L6-v2...")
+        logger.info("Loading ML models...")
         self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-        logger.info("  Loading spaCy en_core_web_sm...")
         try:
             self._nlp = spacy.load("en_core_web_sm")
         except OSError:
-            logger.warning("spaCy model not found. Run: python -m spacy download en_core_web_sm")
+            logger.warning("spaCy model not found.")
             self._nlp = None
-
         self._loaded = True
-        logger.info("✅ Models loaded.")
+        logger.info("Models loaded.")
 
     @property
     def embedder(self) -> SentenceTransformer:
@@ -51,8 +46,7 @@ class ModelManager:
 
     @property
     def classifier(self):
-        # Classifier disabled — uses too much RAM on free tier.
-        # classify_jd_skill_importance() uses regex anyway, not this model.
+        # Removed — not used anywhere, saves ~400MB RAM
         return None
 
     @property
