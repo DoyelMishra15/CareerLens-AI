@@ -48,8 +48,7 @@ app.include_router(rewrite.router,  prefix="/api", tags=["Rewrite"])
 app.include_router(insights.router, prefix="/api", tags=["Insights"])
 
 # Mount CSS, JS as static
-app.mount("/css", StaticFiles(directory=os.path.join(FRONTEND_DIR, "css")), name="css")
-app.mount("/js",  StaticFiles(directory=os.path.join(FRONTEND_DIR, "js")),  name="js")
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 @app.get("/", include_in_schema=False)
 async def serve_index():
