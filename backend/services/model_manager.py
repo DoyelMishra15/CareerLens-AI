@@ -1,28 +1,21 @@
 """
 CareerLens — ML Model Manager
-Singleton loader for all ML models. Ensures models are loaded ONCE and reused.
+Singleton loader. Classifier removed to fit Render free tier (512MB RAM).
 """
 
 import logging
 from typing import Optional
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline
 import spacy
 
 logger = logging.getLogger(__name__)
 
 
 class ModelManager:
-    """
-    Singleton class that loads and caches all ML models.
-    Call ModelManager.get() to get the shared instance.
-    """
-
     _instance: Optional["ModelManager"] = None
 
     def __init__(self):
         self._embedder: Optional[SentenceTransformer] = None
-        self._classifier = None
         self._nlp = None
         self._loaded = False
 
@@ -33,24 +26,13 @@ class ModelManager:
         return cls._instance
 
     def load_all(self):
-        """Load all models (called once at startup)."""
         if self._loaded:
             return
-        logger.info("🔄 Loading ML models (one-time)...")
+        logger.info("🔄 Loading ML models...")
 
-        # 1. Sentence Transformer — lightweight, fast on CPU
         logger.info("  Loading sentence-transformers/all-MiniLM-L6-v2...")
         self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-        # 2. Zero-shot classifier — for skill categorization
-        logger.info("  Loading zero-shot classifier...")
-        self._classifier = pipeline(
-            "zero-shot-classification",
-            model="cross-encoder/nli-MiniLM2-L6-H768",
-            device=-1,  # CPU
-        )
-
-        # 3. spaCy — for NLP (NER, keyword extraction)
         logger.info("  Loading spaCy en_core_web_sm...")
         try:
             self._nlp = spacy.load("en_core_web_sm")
@@ -59,7 +41,7 @@ class ModelManager:
             self._nlp = None
 
         self._loaded = True
-        logger.info("✅ All models loaded.")
+        logger.info("✅ Models loaded.")
 
     @property
     def embedder(self) -> SentenceTransformer:
@@ -69,9 +51,9 @@ class ModelManager:
 
     @property
     def classifier(self):
-        if not self._classifier:
-            self.load_all()
-        return self._classifier
+        # Classifier disabled — uses too much RAM on free tier.
+        # classify_jd_skill_importance() uses regex anyway, not this model.
+        return None
 
     @property
     def nlp(self):
@@ -80,5 +62,4 @@ class ModelManager:
         return self._nlp
 
 
-# Global singleton
 model_manager = ModelManager.get()
