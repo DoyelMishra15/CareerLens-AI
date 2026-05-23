@@ -1,21 +1,35 @@
 """
 CareerLens — ML Model Manager
-Classifier removed; CPU-only torch keeps memory under 512MB.
+Uses fastembed (ONNX-based, no PyTorch) to stay under 512MB RAM.
+Wraps fastembed to match the sentence-transformers .encode() interface
+so no other file needs changing.
 """
 
 import logging
-from typing import Optional
-from sentence_transformers import SentenceTransformer
+import numpy as np
+from typing import Optional, List
 import spacy
 
 logger = logging.getLogger(__name__)
+
+
+class EmbedderWrapper:
+    """Wraps fastembed.TextEmbedding to match sentence-transformers API."""
+
+    def __init__(self):
+        from fastembed import TextEmbedding
+        self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+
+    def encode(self, texts: List[str], convert_to_numpy: bool = True) -> np.ndarray:
+        embeddings = list(self._model.embed(texts))
+        return np.array(embeddings)
 
 
 class ModelManager:
     _instance: Optional["ModelManager"] = None
 
     def __init__(self):
-        self._embedder: Optional[SentenceTransformer] = None
+        self._embedder: Optional[EmbedderWrapper] = None
         self._nlp = None
         self._loaded = False
 
@@ -29,25 +43,29 @@ class ModelManager:
         if self._loaded:
             return
         logger.info("Loading ML models...")
-        self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+        self._embedder = EmbedderWrapper()
+        logger.info("fastembed model loaded.")
+
         try:
             self._nlp = spacy.load("en_core_web_sm")
+            logger.info("spaCy loaded.")
         except OSError:
             logger.warning("spaCy model not found.")
             self._nlp = None
+
         self._loaded = True
-        logger.info("Models loaded.")
+        logger.info("All models ready.")
 
     @property
-    def embedder(self) -> SentenceTransformer:
+    def embedder(self) -> EmbedderWrapper:
         if not self._embedder:
             self.load_all()
         return self._embedder
 
     @property
     def classifier(self):
-        # Removed — not used anywhere, saves ~400MB RAM
-        return None
+        return None  # Not used anywhere
 
     @property
     def nlp(self):
