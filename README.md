@@ -1,16 +1,29 @@
 # ◈ CareerLens
 ### AI-Powered Career Intelligence & Resume Optimization Platform
 
-> Upload your resume. Paste a job description. Get a semantic match score, skill gap heatmap, AI-powered rewrites, and a personalized career growth roadmap — in under 10 seconds, 100% free, no signup.
-
-![CareerLens Screenshot](https://via.placeholder.com/900x500/08080f/00d4aa?text=CareerLens+Dashboard)
-
 ---
 
 ## 🚀 Live Demo
 
-**Backend:** Deploy to be done  
-**Frontend:** None
+**🌐 Live App:** [careerlens-ai-7fy5.onrender.com](https://careerlens-ai-7fy5.onrender.com)
+
+> ⚡ Hosted on Render free tier — may take 30–50s to wake up on first load.
+
+---
+
+## 📸 Screenshots
+
+### Landing Page
+![CareerLens Hero](assets/screenshot-hero.png)
+
+### How It Works
+![Three Steps](assets/screenshot-steps.png)
+
+### Feature Overview
+![Built Different](assets/screenshot-features.png)
+
+### Dashboard — Skill Gap Analysis
+![CareerLens Dashboard](assets/screenshot-dashboard.png)
 
 ---
 
