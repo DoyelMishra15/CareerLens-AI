@@ -114,8 +114,13 @@ async function runAnalysis() {
 
     state.analysis = await response.json();
 
-    // Extract bullet points from resume text preview
-    state.bullets = extractBullets(state.analysis.resume_text_preview);
+    // Use full resume text from preview — API returns 800 chars, use all of it
+    // and also scan the raw text if available
+    state.bullets = extractBullets(
+      (state.analysis.resume_text_preview || '') + '\n' +
+      (state.analysis.resume_text || '')
+    );
+  
 
     renderResults(state.analysis);
 
@@ -443,11 +448,24 @@ function animateNumber(el, from, to, duration) {
 function extractBullets(text) {
   const lines = text.split('\n');
   const bullets = [];
-  const markers = ['•', '–', '-', '▪', '◦', '○', '*', '→'];
+  // Match any unicode bullet, dash, arrow, or numbered list at line start
+  const bulletRe = /^[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25AB\u25CF\u25CB\u2014\u2013\u2012\u2010\-\*\u2192\u25BA\u25B8▪◦○•–—→►]\s*/;
   for (const line of lines) {
     const s = line.trim();
-    if (s && (markers.includes(s[0]) || /^\d[.)]\s/.test(s))) {
-      const clean = s.replace(/^[•–\-▪◦○*→\d.)\s]+/, '').trim();
+    if (!s) continue;
+    // Check bullet markers (including unicode variants)
+    if (bulletRe.test(s)) {
+      const clean = s.replace(bulletRe, '').trim();
+      if (clean.length > 20) bullets.push(clean);
+    }
+    // Check numbered lists: 1. or 1)
+    else if (/^\d{1,2}[.)]\s+\w/.test(s)) {
+      const clean = s.replace(/^\d{1,2}[.)]\s+/, '').trim();
+      if (clean.length > 20) bullets.push(clean);
+    }
+    // Catch lines starting with a special/non-ASCII char that looks like a bullet
+    else if (s.charCodeAt(0) > 127 && s.charCodeAt(0) < 10000 && s[1] === ' ') {
+      const clean = s.slice(2).trim();
       if (clean.length > 20) bullets.push(clean);
     }
   }

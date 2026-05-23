@@ -79,7 +79,7 @@ async def analyze_resume(
         match_label=get_match_label(match_score),
         skills=skills,
         weaknesses=weaknesses,
-        resume_text_preview=resume_text[:800],
+        resume_text_preview=resume_text[:3000],
         job_title=job_title,
         analysis_id=str(uuid.uuid4())[:8],
     )
