@@ -255,4 +255,4 @@ MIT — free to use, modify, and deploy.
 
 ---
 
-*Built with ◈ CareerLens — where AI meets career intelligence*
+*Built with ◈ CareerLens — where AI meets career intelligence.*
