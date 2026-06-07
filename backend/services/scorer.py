@@ -245,7 +245,7 @@ def _skill_present_score(
     resume_embedding: np.ndarray,
     embedder,
     implied_scores: dict[str, float],
-    sem_threshold: float = 0.58,
+    sem_threshold: float = 0.40,
 ) -> tuple[str, float]:
     """
     Returns (status, confidence).
@@ -264,10 +264,8 @@ def _skill_present_score(
     # b) Implied skill check
     if skill_canonical in implied_scores:
         conf = implied_scores[skill_canonical]
-        if conf >= 0.40:
-            return "partial", round(conf * 0.5, 2)
-
-    return "missing", round(float(np.clip(sim * 0.3, 0.0, 0.25)), 2)
+        if conf >= 0.50:
+            return "implied", round(conf, 2)
 
     # c) Semantic similarity
     cache_key = (skill_canonical, hash(resume_text[:600]))
