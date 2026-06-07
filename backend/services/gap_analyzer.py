@@ -161,15 +161,15 @@ def detect_resume_weaknesses(resume_text: str, sections: dict) -> List[ResumeWea
     # 1. No quantified achievements
     # Matches: 30%, $50, 2x, 50+, 50K users, "approximately 30 percent", "2 times", etc.
     has_numbers = bool(re.search(
-        r"\d+\s*%"                                          # 30%
-        r"|\$\s*\d+"                                        # $50
-        r"|\d+\s*x\b"                                       # 2x
-        r"|\d+\s*\+"                                        # 50+
+        r"\d+\s*%"
+        r"|\$\s*\d+"
+        r"|\d+\s*x\b"
+        r"|\d+\s*\+"
         r"|\d+\s*(million|billion|k\b|users|customers|accuracy|f1|requests)"
-        r"|approximately\s+\d+"                             # approximately 30
-        r"|\d+\s+percent"                                   # 30 percent
-        r"|\d+\s+times\b"                                   # 2 times
-        r"|\d+\s*(seconds?|minutes?|hours?)\b",             # 2 seconds
+        r"|approximately\s+\d+"
+        r"|\d+\s+percent"
+        r"|\d+\s+times\b"
+        r"|\d+\s*(seconds?|minutes?|hours?)\b",
         resume_text, re.I
     ))
     if not has_numbers:
